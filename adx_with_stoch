@@ -1,0 +1,223 @@
+#usage
+#nodes += GetAll_TruStrIdxN(fc=fc, feature=f_vwap, control=fu.GetFeatureControl(fc,f_vwap),symbol='vwap')
+#nodes += GetAll_AdxN(fc=fc,bar=bar, type='mean_diff',symbol='bar')
+#nodes += GetAll_AdxN(fc=fc,bar=bar,type='dmx',symbol='bar')
+#nodes += GetAll_AdxN(fc=fc,bar=bar,type='origin',symbol='bar')
+#nodes += GetAll_StochOscilN (fc=fc, bar=bar,symbol='bar')
+
+
+def GetAll_AdxN(fc,type,bar,halftimes=[1, 3, 6, 13],bs=[0,0.1, 0.2], name: str = "AdxN", symbol: str = None):
+    valid_type = [ 'origin','mean_diff', 'dmx' ]
+    if not type in valid_type :
+        raise Exception('Get_AdxN: type invalid.')
+    nodes = []
+    for halftime in halftimes:
+        for b in bs:
+            id_node = Get_Adx_Directional(fc,type,bar,halftime,b)
+            nodes.append(id_node)
+            if hasattr(fc, "MapNodeName"):
+                full_name = f"{name}_ht:{halftime}_b:{b}_type:{type}"
+                if symbol is not None:
+                    full_name = f"{symbol}_{full_name}"
+                fc.MapNodeName(id_node, full_name)
+
+    return nodes
+
+def Get_Adx_Directional (fc, type, bar, halftime, b):
+    
+        valid_type = [ 'origin','mean_diff', 'dmx' ]
+        if not type in valid_type :
+            raise Exception('Get_Adx_Directional: type invalid.')
+
+        id_c = fu.GetFeatureControl(fc, feature=bar)
+        DM,TR = Get_DM_TR(fc,bar)
+        DI = fu.GetBinaryOp(fc,'BINARY_OP_A_DIV_B',a=DM,b=TR)
+        
+        if type == 'origin':
+            id_value = DI
+            
+        if type == 'mean_diff':
+            data = {
+                'fc': fc,
+                'optype': 'EMA_OP_MEAN_DIFF',
+                'opinvf': fu.DEFAULT_OP_INVALID_FEATURE,
+                'opinvv': 'OP_INVALID_VALUE_ADHERE',
+                'feature': DI,
+                'control': id_c,
+                'halftime': halftime
+            }
+            id_value = fu.GetEmaOpN(**data)
+
+        if type == 'dmx':
+            id_value = Get_AdmoveN(fc, bar, halftime)
+
+        id_adx = Get_AdxN(fc,bar, halftime)
+        id_predicate = fu.GetUnaryOpBool(fc, 'UNARY_OP_BOOL_GT', id_adx, b)
+        id_zero = fu.GetConstValue(fc, value = 0.0)
+        id_node = fu.GetIfOp(fc, id_predicate, id_value, id_zero)
+        return id_node
+        
+
+def Get_AdxN (fc,bar,halftime):
+    DM,TR = Get_DM_TR(fc,bar)
+    id_c = fu.GetFeatureControl(fc, feature=bar)
+    
+    
+    DM_pos = fu.GetUnaryOp(fc, type = 'UNARY_OP_MAX', a = DM, scalar = 0.0)
+    DM_neg = fu.GetUnaryOp(fc, type = 'UNARY_OP_MIN', a = DM, scalar = 0.0)
+    DM_neg = fu.GetUnaryOp(fc, type = 'UNARY_OP_MUL', a = DM_neg, scalar = -1.0)
+
+    data = {
+        'fc': fc,
+        'optype': 'EMA_OP_MEAN',
+        'opinvf': fu.DEFAULT_OP_INVALID_FEATURE,
+        'opinvv': 'OP_INVALID_VALUE_ADHERE',
+        'feature': None,
+        'control': id_c,
+        'halftime': halftime
+    }
+    data['feature'] = DM_pos
+    DM_pos_ema = fu.GetEmaOpN(**data)
+    data['feature'] = DM_neg
+    DM_neg_ema = fu.GetEmaOpN(**data)
+    data['feature'] = TR
+    TR_ema = fu.GetEmaOpN(**data)
+    DI_pos_ema = fu.GetBinaryOp(fc, type = 'BINARY_OP_A_DIV_B', a = DM_pos_ema, b = TR_ema)
+    DI_neg_ema = fu.GetBinaryOp(fc, type = 'BINARY_OP_A_DIV_B', a = DM_neg_ema, b = TR_ema)
+    
+    id_num = fu.GetBinaryOp(fc, type = 'BINARY_OP_A_SUB_B', a = DI_pos_ema, b = DI_neg_ema)
+    id_num = fu.GetUnaryOp(fc, type = 'UNARY_OP_ABS', a = id_num, scalar = 0.0)
+    id_den = fu.GetBinaryOp(fc, type = 'BINARY_OP_A_ADD_B', a = DI_pos_ema, b = DI_neg_ema)
+    id_ratio = fu.GetBinaryOp(fc, type = 'BINARY_OP_A_DIV_B', a = id_num, b = id_den)
+    id_ratio = fu.GetErrorValue(fc, feature = id_ratio, value = 0.0)
+    data = {
+        'fc': fc,
+        'optype': 'EMA_OP_MEAN_DIFF',
+        'opinvf': fu.DEFAULT_OP_INVALID_FEATURE,
+        'opinvv': 'OP_INVALID_VALUE_ADHERE',
+        'feature': id_ratio,
+        'control': id_c,
+        'halftime': halftime
+    }
+    id_node = fu.GetEmaOpN(**data) #这里不知道要不要再平滑，和普通的不太一样，可以考虑不平滑，本质是一个趋势强度
+    
+    return id_node
+
+def Get_AdmoveN(fc,bar,halftime) :
+    DM,TR = Get_DM_TR(fc,bar)
+    id_c = fu.GetFeatureControl(fc, feature=bar)
+    
+    
+    DM_pos = fu.GetUnaryOp(fc, type = 'UNARY_OP_MAX', a = DM, scalar = 0.0)
+    DM_neg = fu.GetUnaryOp(fc, type = 'UNARY_OP_MIN', a = DM, scalar = 0.0)
+    DM_neg = fu.GetUnaryOp(fc, type = 'UNARY_OP_MUL', a = DM_neg, scalar = -1.0)
+
+    data = {
+        'fc': fc,
+        'optype': 'EMA_OP_MEAN',
+        'opinvf': fu.DEFAULT_OP_INVALID_FEATURE,
+        'opinvv': 'OP_INVALID_VALUE_ADHERE',
+        'feature': None,
+        'control': id_c,
+        'halftime': halftime
+    }
+    data['feature'] = DM_pos
+    DM_pos_ema = fu.GetEmaOpN(**data)
+    data['feature'] = DM_neg
+    DM_neg_ema = fu.GetEmaOpN(**data)
+    data['feature'] = TR
+    TR_ema = fu.GetEmaOpN(**data)
+    
+    DI_pos_ema = fu.GetBinaryOp(fc, type = 'BINARY_OP_A_DIV_B', a = DM_pos_ema, b = TR_ema)
+    DI_neg_ema = fu.GetBinaryOp(fc, type = 'BINARY_OP_A_DIV_B', a = DM_neg_ema, b = TR_ema)
+    DI_abs_ema = fu.GetBinaryOp(fc, type = 'BINARY_OP_A_ADD_B', a = DI_pos_ema, b = DI_neg_ema)
+    id_node = fu.GetBinaryOp(fc, type = 'BINARY_OP_A_SUB_B', a = DI_pos_ema, b = DI_neg_ema)
+    id_node = fu.GetBinaryOp(fc, type = 'BINARY_OP_A_DIV_B', a = id_node, b = DI_abs_ema)
+    id_node = fu.GetErrorValue(fc, feature = id_node, value = 0.0)
+    return id_node
+
+def Get_DM_TR(fc,bar):
+    id_c = fu.GetFeatureControl(fc, feature=bar)
+    o, h, l, c = [bfu.GetBarValue(fc, barnode=bar, type=f"BARVALUE_{v}") for v in ["OPEN", "HIGH", "LOW", 'CLOSE']]
+    # DM = fu.GetBinaryOp(fc, "BINARY_OP_A_SUB_B", h, l)
+    vwap = fu.GetBinaryOp(fc, type="BINARY_OP_A_DIV_B", a=bfu.GetBarValue(fc, barnode=bar, type="BARVALUE_QTYPX"), b=bfu.GetBarValue(fc, barnode=bar, type="BARVALUE_QTY"))
+    h_sub_l = fu.GetBinaryOp(fc,type='BINARY_OP_A_SUB_B',a=h,b=l)
+    lagc = fu.GetLagOpN(fc,'LAG_OP_VALUE',fu.DEFAULT_OP_INVALID_FEATURE,fu.DEFAULT_OP_INVALID_SIZE,\
+        'OP_INVALID_VALUE_HANDLE',c,id_c,1)
+    lagl = fu.GetLagOpN(fc,'LAG_OP_VALUE',fu.DEFAULT_OP_INVALID_FEATURE,fu.DEFAULT_OP_INVALID_SIZE,\
+        'OP_INVALID_VALUE_HANDLE',l,id_c,1)
+    lagh = fu.GetLagOpN(fc,'LAG_OP_VALUE',fu.DEFAULT_OP_INVALID_FEATURE,fu.DEFAULT_OP_INVALID_SIZE,\
+        'OP_INVALID_VALUE_HANDLE',h,id_c,1)
+    h_sub_lagc = fu.GetBinaryOp(fc,type='BINARY_OP_A_SUB_B',a=h,b=lagc)
+    abs_h_sub_lagc = fu.GetUnaryOp(fc,type='UNARY_OP_ABS',a=h_sub_lagc)
+    l_sub_lagc = fu.GetBinaryOp(fc,type='BINARY_OP_A_SUB_B',a=l,b=lagc)
+    abs_l_sub_lagc = fu.GetUnaryOp(fc,type='UNARY_OP_ABS',a=l_sub_lagc)
+    TR = fu.GetBinaryOp(fc,'BINARY_OP_A_MAX_B',a=h_sub_l,b=fu.GetBinaryOp(fc,'BINARY_OP_A_MAX_B',a=abs_h_sub_lagc,\
+        b=abs_l_sub_lagc))
+    
+    DM1 = fu.GetBinaryOp(fc,'BINARY_OP_A_MAX_B',a=fu.GetBinaryOp(fc,type='BINARY_OP_A_SUB_B',a=h,b=lagh),\
+        b=fu.GetConstValue(fc, 0)) #正数 or 0
+    
+    DM2 = fu.GetBinaryOp(fc,'BINARY_OP_A_MAX_B',a=fu.GetBinaryOp(fc,type='BINARY_OP_A_SUB_B',a=lagl,b=l),\
+        b=fu.GetConstValue(fc, 0)) #正数 or 0
+    
+    DM3 = fu.GetUnaryOp(fc,type='UNARY_OP_MUL',a=DM2,scalar=-1) #负数 or 0
+
+    cmp = fu.GetBinaryOpBool(fc, "BINARY_OP_BOOL_A_GT_B",a=DM1,b=DM2)
+    DM = fu.GetIfOp(fc, cmp, DM1, DM3)
+    return DM,TR
+
+
+def Get_StochOscilN (fc, bar,span, halftime) :
+    id_c = fu.GetFeatureControl(fc, feature=bar)
+    o, h, l, c = [bfu.GetBarValue(fc, barnode=bar, type=f"BARVALUE_{v}") for v in ["OPEN", "HIGH", "LOW", 'CLOSE']]
+    vwap = fu.GetBinaryOp(fc, type="BINARY_OP_A_DIV_B", a=bfu.GetBarValue(fc, barnode=bar, type="BARVALUE_QTYPX"), b=bfu.GetBarValue(fc, barnode=bar, type="BARVALUE_QTY"))
+    data = {
+        'fc': fc,
+        'optype': None,
+        'opinvf': fu.DEFAULT_OP_INVALID_FEATURE,
+        'opinvs': fu.DEFAULT_OP_INVALID_SIZE,
+        'opinvv': 'OP_INVALID_VALUE_ADHERE',
+        'feature': None,
+        'control': id_c,
+        'spann': span
+    }
+    data['optype'] = 'MINMAX_OP_MIN'
+    data['feature'] = l
+    id_min = fu.GetMinMaxOpN(**data)
+    data['optype'] = 'MINMAX_OP_MAX'
+    data['feature'] = h
+    id_max = fu.GetMinMaxOpN(**data)
+
+    id_num = fu.GetBinaryOp(fc, type = 'BINARY_OP_A_SUB_B', a = vwap, b = id_min)
+    id_den = fu.GetBinaryOp(fc, type = 'BINARY_OP_A_SUB_B', a = id_max, b = id_min)
+    id_k = fu.GetBinaryOp(fc, type = 'BINARY_OP_A_DIV_B', a = id_num, b = id_den)
+    id_k = fu.GetErrorValue(fc, feature = id_k, value = 0.5)
+
+    data = {
+        'fc': fc,
+        'optype': 'EMA_OP_MEAN',
+        'opinvf': fu.DEFAULT_OP_INVALID_FEATURE,
+        'opinvv': 'OP_INVALID_VALUE_ADHERE',
+        'feature': id_k,
+        'control': id_c,
+        'halftime': halftime 
+    }
+    id_d = fu.GetEmaOpN(**data)
+    
+    id_node = fu.GetBinaryOp(fc, type = 'BINARY_OP_A_SUB_B', a = id_k, b = id_d)
+    return id_node
+
+def GetAll_StochOscilN(fc,bar,spans=[5, 8, 12, 35], halftimes=[4, 12, 25], name: str = "StochOscilN", symbol: str = None):
+    nodes = []
+    for span in spans:
+        for halftime in halftimes:
+            id_node = Get_StochOscilN(fc,bar,span,halftime)
+            nodes.append(id_node)
+            if hasattr(fc, "MapNodeName"):
+                full_name = f"{name}_span:{span}_h:{halftime}"
+                if symbol is not None:
+                    full_name = f"{symbol}_{full_name}"
+                fc.MapNodeName(id_node, full_name)
+
+    return nodes
